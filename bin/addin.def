@@ -1,0 +1,5 @@
+id=jthi.jmp.tools.script.launcher
+name=JMP-Tools Script Launcher
+supportJmpSE=0
+addinVersion=1
+minJmpVersion=16

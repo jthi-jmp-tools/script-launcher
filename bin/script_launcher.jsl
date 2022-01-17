@@ -1,0 +1,247 @@
+﻿Names Default To Here(1);
+
+//Get utility functions
+Include("bin/gui_utilities.jsl"); //or copy them directly here to make more standalone
+
+//setup default settings
+default_settings = ["GUI" => ["window_title" => "Script Launcher", "window_icon" => "NewApplication", "keep_dialog_open" => 1]];
+//load settings from file and get "final settings"
+aa_settings = load_settings(default_settings, settings_file_name = "settings.json");
+
+//check if the table is already open
+check_open_window(aa_settings["GUI"]["window_title"]);
+
+dt_list = Sort Ascending(Get Data Table List() << get name);
+If(N Items(dt_list) > 0,
+	init_dt = Contains(dt_list, Current Data Table() << get name),
+	init_dt = .;
+);
+
+
+get_btn_idx = function({this}, {row_count, btn_idx, cur_btn},
+	row_count = N Items(window:tb[1] << get);
+	btn_idx = 0;
+	cur_btn = this;
+	While(!IsEmpty(cur_btn << sib) & btn_idx <= row_count,
+		btn_idx++;
+		cur_btn = cur_btn << sib;
+	);
+	return(row_count - btn_idx);
+);
+
+get_directory = function({path}, {Default Local},
+	If(Host Is("Windows"),
+		path = Convert File Path(path, Windows);
+		directory = Substr(path, 1, Contains(path, "\", -1));
+	,
+		path = Convert File Path(path, posix);
+		directory = Substr(path, 1, Contains(path, "/", -1));
+	);
+	return(directory);
+);
+
+
+btn_launch_expr = Expr(
+	Button Box("", <<Set Icon("WinEditSubmitScript"), << Enable(enable_launch), 
+	<< Set Tip("Hold Alt/Shift to copy script path to clipboard.\!NHold Ctrl to open script in script window."),
+	<< Set Function(function({this}, launch_expr)));
+);
+
+launch_expr = Expr(
+	cur_row = get_btn_idx(this);
+	col_ref = Window(aa_settings["GUI"]["window_title"]):tb[Contains(Window(aa_settings["GUI"]["window_title"]):tb << get names, "Script Name")];
+	script_name = (col_ref << get)[cur_row];
+	col_ref = nw:tb[Contains(nw:tb << get names, "Script Path")];
+	script_path = (col_ref << get)[cur_row];
+	if(Any(Is Alt Key(), IsShift Key()),
+		Set Clipboard("\!""||script_path||"\!"");
+		stop();
+	);
+	If(IsControlKey(),
+		Open(script_path);
+		stop();		
+	);
+	print(EvalInsert("Launching script ^script_name^ from ^script_path^"));
+	Try(
+		Include(script_path, << New Context, << Names Default To Here);
+		If(nw:cb_close << get == 0,
+			nw << Close Window;
+		);
+		wait(0);
+	, //error
+		If(Type(exception_msg) == "List",
+			error_msg = Word(1, exception_msg[1], "\!""),
+			error_msg = Char(exception_msg);
+		);
+		show(exception_msg);
+		mini_modal_window("Failed to launch script", 
+			"Failed to launch script " || script_name || ".\!NError message: " || error_msg
+			, "ErrorSmall", "ErrorSmall"
+		);
+	);
+);
+
+btn_settings_expr = Expr(
+	Button Box("", <<Set Icon("Gear"), <<Enable(enable_settings), << Set Function(function({this}, settings_expr)));
+);
+settings_expr = Expr(
+	cur_row = get_btn_idx(this);
+	col_ref = nw:tb[Contains(window:tb << get names, "Script Name")];
+	script_name = (col_ref << get)[cur_row];
+	col_ref = .;
+	col_ref = nw:tb[Contains(window:tb << get names, "Script Path")];
+	settings_path = get_directory((col_ref << get)[cur_row]) || "settings.json";
+	open_script_settings(script_name, settings_path);
+);
+
+btn_pick_path_expr = Expr(
+	Button Box("", <<Set Icon("WinFileOpen"), << Set Function(function({this}, pick_path_expr)));
+);
+pick_path_expr = Expr(
+	cur_row = get_btn_idx(this);
+	col_ref = nw:tb[Contains(window:tb << get names, "Script Path")];
+	script_path = (col_ref << get)[cur_row];
+	Open(get_directory(script_path));
+);
+
+btn_help_expr = Expr(
+	Button Box("", <<Set Icon("WinHelpAbout"), <<Enable(enable_help), << Set Function(function({this}, help_expr)));
+);
+
+help_expr = Expr(
+	cur_row = get_btn_idx(this);
+	col_ref = nw:tb[Contains(window:tb << get names, "Script Path")];
+	script_path = (col_ref << get)[cur_row];
+	help_path = get_directory((col_ref << get)[cur_row]) || "doc/README.html";
+	Web(help_path, JMP Window);
+);
+
+open_script_settings = function({script_name, script_path}, {Default local},
+	script_save_expr = Expr(
+		is_json = Trim Whitespace(Log Capture(Parse JSON(sb_ref << get text)));
+		If(IsMissing(is_json),
+			Save Text File(script_path, sb_ref << get text);
+			mini_modal_window("Save succesful", "Settings file saved succesfully!", "CheckCircle", "CheckCircle");
+		,
+			show(is_json);
+		);
+	);
+	
+	Eval(EvalExpr(New Window("Settings for " || script_name, << Show toolbars(0), << Show Menu(0), << modal,<<Set Window Icon("Gear"),
+		V List Box(align("center"),
+			Border Box(Sides(15),Text Box("Script settings for " || script_name, << Set Font Size(12))),
+			sb = Script Box(Load Text File(script_path),
+				"JSON",
+				750,500
+			),
+			Lineup Box(N Col(2),
+				Button Box("Save Settings", << Set Function(function({this},
+					sb_ref = (this << parent) << prev sib;
+					Expr(Name Expr(script_save_expr))
+				))),
+				Button Box("Close",
+					Current Window() << Close Window;
+				)
+			)
+		)
+	)));
+);
+
+Eval(Eval Expr(nw = New Window(aa_settings["GUI"]["window_title"], << show toolbars(0), << show menu(0),
+	<<Set Window Icon(aa_settings["GUI"]["window_icon"]),
+	V List Box(align("center"),
+		Border Box(Sides(15), H Center Box(H List Box(
+			Text Box("SCRIPT LAUNCHER", << Font Color("Blue")),
+		))),
+		Panel Box("Current data table",
+			Lineup Box(N Col(3),
+				window:cb = Combo Box(dt_list, << Set(init_dt),
+					<< set function(function({this},
+						Current Data Table(Datatable((this << get selected)));
+					))
+				),
+				Button Box("", Try(Datatable(window:cb << get selected) << Bring Window To Front),
+					<< Set Icon("ActivateDataTable")
+				),
+				Button Box("",
+					dt_list = Get Data Table List() << get name;
+					If(N Items(dt_list) > 0,
+						init_dt = dt_list[Contains(dt_list, Current Data Table() << get name)];
+						window:cb << Set Items(dt_list);
+						window:cb << Set(init_dt);
+					,
+						window:cb << Set Items({});
+					);
+					, <<Set Icon("Refresh")
+				)
+			)
+		),
+		//Tab Box(
+			//Tab Page Box("Page1",
+			Panel Box("Scripts",
+				Lineup Box(N Col(2),
+					window:cb_close = Check Box({""}, << set all(aa_settings["GUI"]["keep_dialog_open"])),
+					Text Box("Keep Script Launcher open after launching script")
+				),
+				Panel Box("Grouping for scripts",
+					window:tb = Table Box(<< Set Scrollable(10, 0),
+						String Col Box("Script Name", {}),
+						Col Box("Launch", ),
+						Col Box("Settings", ),
+						//Col Box("Open Dir", ) open script?
+						//Col Box("Open Dir", ) copy path to clipboard?
+						Col Box("Open Dir", ),
+						Col Box("Help", ),
+						String Col Box("Script Path", {}, << Visibility("Collapse")),
+					)
+				//)
+			)
+		),
+		Panel Box("Actions",
+			H List Box(align("center"),
+				//Button Box("Refresh Scripts", set_scripts_to_tb, << Set Icon("Refresh")),
+				Button Box("Help", 
+					Web(Expr(Substr(Convert File Path("README.html"), 2)), JMP Window);
+					,<< Set Icon("WinHelpAbout")
+				),
+				Button Box("Script launcher settings", 
+					open_script_settings("Script Launcher", Expr(Convert File Path("settings.json"))),
+					<<Set Icon("Gear")
+				),
+				Button Box("Close",
+					Current Window() << Close Window;
+				)
+			)
+		)
+	)
+)));
+
+
+nw << Show Window(0);
+set_scripts_to_tb = Expr(
+	//delete rows
+	For Each({_}, nw:tb[1] << get,
+		nw:tb << Delete Row(1);
+	);
+	For Each({{script_name, script_path}}, aa_settings["Scripts"],
+		setting_row = Eval List({script_name}); //jos ei löydy scriptaa, joku riville???
+		If(File Exists(script_path) & Ends With(script_path, ".jsl"),
+			cur_dir = get_directory(script_path);
+			enable_settings = If(File Exists(cur_dir || "settings.json"),1,0);
+			enable_launch = 1;
+			enable_help = If(File Exists(cur_dir || "doc/README.html"),1,0);
+		,
+			enable_launch = 0;
+			enable_settings = 0;
+			enable_help = 0;
+			Print(Eval Insert("Script name ^script_name^ missing file at ^script_path^ or missing .jsl extension"));
+		);
+		Eval(EvalExpr(nw:tb << Add Row(Expr(Insert(setting_row, {btn_launch_expr, btn_settings_expr, btn_pick_path_expr, btn_help_expr, Convert File Path(script_path)})))));
+	);
+);
+set_scripts_to_tb;
+wait(0);
+nw << Show Window(1);
+
+move_window(nw);
+Write();
